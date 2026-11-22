@@ -1,5 +1,6 @@
-const CACHE = "kidseng-v1";
-const FILES = ["./", "./index.html", "./manifest.json", "./icon-180.png", "./icon-512.png"];
+/* 缓存名和 localStorage 的 kidseng.v1 不是一回事。升缓存只为了换掉旧页面，不碰学习记录。 */
+const CACHE = "kidseng-v2";
+const FILES = ["./", "./index.html", "./speech.js", "./manifest.json", "./icon-180.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="小贝学英语">
 <meta name="theme-color" content="#ffb7d5">
+<meta name="kidseng-build" content="20261122us1">
 <meta name="color-scheme" content="light">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -123,6 +124,8 @@ h1.app{font-size:15px;color:var(--muted);font-weight:700;text-align:center;lette
 .nav-row .arr:disabled{opacity:.3}
 .speak-btn{flex:1;height:72px;border-radius:24px;background:linear-gradient(160deg,#ff9ec4,#ff7eab);color:#fff;font-size:24px;font-weight:900;box-shadow:0 8px 0 #e86a98}
 .speak-btn:active{transform:translateY(4px);box-shadow:0 4px 0 #e86a98}
+.speak-btn.is-speaking,.quiz-play.is-speaking{animation:pulse .8s ease infinite}
+.opt.hinted,.letter-tile.hinted{box-shadow:0 0 0 5px #3cbf8a;background:#f3fff8}
 
 /* —— 听音选图 —— */
 .quiz-head{text-align:center;padding:6px 0 12px}
@@ -246,13 +249,14 @@ h1.app{font-size:15px;color:var(--muted);font-weight:700;text-align:center;lette
 <div id="v-stickers" class="view"></div>
 <div id="cele"></div>
 <div id="parent" class="sheet"></div>
-<div id="toast"></div>
+<div id="toast" role="status"></div>
+<script src="speech.js"></script>
 <script>
 
 /* 改名：改这里即可（页面标题会跟着变）。上架名还要同步改 manifest.json 和 apple-mobile-web-app-title。 */
 var APP_NAME = "小贝学英语";
 var STORAGE_KEY = "kidseng.v1";
-var VOICE_RATE = 0.8;
+var APP_BUILD = "20261122us1";
 
 var NAMES = ["Lily","Emma","Mia","Bella","Ella","Ruby","Amy","Sophie","Grace","Chloe","Lucy","Zoe","Ivy","Ava","Nina","Maya"];
 
@@ -362,7 +366,11 @@ var letters={mode:"", i:0, list:[], opts:[], spell:null, locked:false};
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"'`]/g, function(c){ return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;","`":"&#96;"})[c]; }); }
 function today(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
-function toast(msg){ var t=$("toast"); t.textContent=msg; t.style.display="block"; clearTimeout(toast._t); toast._t=setTimeout(function(){ t.style.display="none"; }, 1800); }
+function toast(msg){
+  var t=$("toast"); t.textContent=msg; t.style.display="block";
+  clearTimeout(toast._t);
+  toast._t=setTimeout(function(){ t.style.display="none"; }, msg && msg.length>18 ? 3400 : 1800);
+}
 
 function defaultStore(){ return {name:"", learned:{}, stickers:[], today:{date:today(), words:[], stickerCount:0}}; }
 function loadStore(){
@@ -411,50 +419,55 @@ function pickWeighted(list, n, preferIds){
 }
 function shuffle(a){ a=a.slice(); for(var i=a.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
 
-/* ---------- 发音（按 iOS 坑处理） ---------- */
-var voices=[];
-function loadVoices(){
-  try{ voices=(window.speechSynthesis && speechSynthesis.getVoices())||[]; }catch(e){ voices=[]; }
+/* ---------- 发音：优先美式系统声，tree/grape 等按英语原文整词读 ---------- */
+function primeVoices(){
+  try{ if(window.speechSynthesis && speechSynthesis.getVoices) speechSynthesis.getVoices(); }catch(e){}
 }
+primeVoices();
 if(window.speechSynthesis){
-  loadVoices();
-  try{ speechSynthesis.addEventListener("voiceschanged", loadVoices); }catch(e){}
-  speechSynthesis.onvoiceschanged=loadVoices;
+  speechSynthesis.onvoiceschanged=primeVoices;
+  try{ speechSynthesis.addEventListener("voiceschanged", primeVoices); }catch(e){}
 }
-function normLang(l){ return String(l||"").replace("_","-").toLowerCase(); }
-function pickVoice(){
-  loadVoices();
-  if(!voices.length) return null;
-  var lang="en-gb";
-  var same=voices.filter(function(v){ return normLang(v.lang)===lang; });
-  if(!same.length) same=voices.filter(function(v){ return normLang(v.lang).indexOf("en-gb")===0; });
-  var pref=/Daniel|Arthur|Kate|Serena|Martha|Moira/;
-  var v=same.filter(function(v){ return pref.test(v.name); })[0] || same[0];
-  if(v) return v;
-  var us=voices.filter(function(v){ return normLang(v.lang).indexOf("en-us")===0; });
-  return us[0] || voices.filter(function(v){ return /^en/i.test(v.lang||""); })[0] || null;
-}
-function speak(text){
-  if(!window.speechSynthesis || !text) return;
-  try{
-    var u=new SpeechSynthesisUtterance(String(text));
-    var v=pickVoice();
-    if(v){ try{ u.voice=v; }catch(e){} u.lang=v.lang||"en-GB"; }
-    else { u.lang="en-GB"; }
-    u.rate=VOICE_RATE;
-    try{ speechSynthesis.resume(); }catch(e){}
-    if(speechSynthesis.speaking || speechSynthesis.pending){
-      try{ speechSynthesis.cancel(); }catch(e){}
-      try{ speechSynthesis.resume(); }catch(e){}
-    }
-    speechSynthesis.speak(u);
-    try{ speechSynthesis.resume(); }catch(e){}
-  }catch(e){}
-}
+document.addEventListener("pointerdown", primeVoices, {passive:true, capture:true});
+
+var speechCtl = KidsEngSpeech.createController({
+  getSynth: function(){ return window.speechSynthesis || null; },
+  toast: function(m){ toast(m); },
+  onState: function(on){ setSpeakBusy(on); }
+});
+function speak(text, kind){ return speechCtl.speak(text, kind||"word"); }
 function speakWord(w){
   if(!w) return;
   if(w.letter) speak(w.letter);
   else speak(w.en);
+}
+/* 看图字母卡上写着例词。只读字母会让 tree/grape 这些例词听起来完全不是那个词。 */
+function speakLook(w){
+  if(!w) return;
+  if(w.letter) speak(KidsEngSpeech.letterLine(w.letter, w.example && w.example.en));
+  else speak(w.en);
+}
+function setSpeakBusy(on){
+  ["lookSay","quizSay","letSay","spellSay"].forEach(function(id){
+    var el=$(id);
+    if(!el) return;
+    if(!el.getAttribute("data-label")) el.setAttribute("data-label", el.textContent);
+    el.classList.toggle("is-speaking", !!on);
+    el.textContent = on ? "🔊 在听" : el.getAttribute("data-label");
+  });
+}
+function voiceStatusText(){
+  var v=speechCtl.pickVoice();
+  var last=speechCtl.last()||{};
+  var line;
+  if(v){
+    var us=KidsEngSpeech.isUS(v.lang);
+    line=v.name+" · "+KidsEngSpeech.bcp47For(v)+(us?" · 美式":" · 这台设备没有美式，正在用这个英语声音");
+  } else {
+    line="还没拿到声音列表。播放时会请求美式 en-US。";
+  }
+  if(last.spoken) line+="　刚才读的是："+last.spoken;
+  return line;
 }
 
 /* ---------- 音效 ---------- */
@@ -542,7 +555,7 @@ function renderPick(changing){
 function confirmName(name){
   store.name=name; save();
   sfxGood();
-  speak("Hello, "+name+"!");
+  speak("Hello, "+name+"!", "phrase");
   openCele({
     emoji:"🎉",
     msg:"Hello, "+name+"!",
@@ -586,7 +599,7 @@ function renderHome(){
       '<button type="button" class="mode peach" data-go="stickers"><span class="ic">🎀</span>贴纸册</button>'+
     '</div>'+
     '<p class="hint">添加到主屏幕，没网也能玩<br>没声音请检查静音键</p>';
-  $("hiBtn").onclick=function(){ speak("Hi, "+name+"!"); };
+  $("hiBtn").onclick=function(){ speak("Hi, "+name+"!", "phrase"); };
   var ch=document.getElementById("changeName");
   if(ch) ch.onclick=function(){ goPick(); };
   el.querySelectorAll(".mode").forEach(function(b){
@@ -662,7 +675,7 @@ function renderLook(speakNow){
     '</div></div>';
   bindBack(el);
   bindThemes(el, function(th){ startLook(th); });
-  function say(){ if(isLetter){ speak(w.letter); } else speakWord(w); }
+  function say(){ speakLook(w); }
   $("lookCard").onclick=function(){ say(); };
   $("lookSay").onclick=function(){ say(); };
   $("lookPrev").onclick=function(){ if(look.i>0){ look.i--; renderLook(true); } };
@@ -737,15 +750,13 @@ function onQuizPick(btn, w){
     btn.classList.add("ok");
     markCorrect(w.id);
     sfxGood();
-    var praise=Math.random()<0.45 && store.name;
-    if(praise) speak("Great job, "+store.name+"!");
-    else speakWord(w);
+    speakWord(w);
     var last=quiz.i>=quiz.list.length-1;
     setTimeout(function(){
       if(last) finishRound("quiz");
       else openCele({
         emoji: pickWinEmoji(),
-        msg: praise ? ("Great job, "+store.name+"!") : "答对啦！",
+        msg: "答对啦！",
         sub: w.en+"  ·  "+w.zh,
         ok:"下一题",
         onok:function(){ quiz.i++; renderQuiz(true); }
@@ -762,7 +773,8 @@ function onQuizPick(btn, w){
     speakWord(w);
     if(quiz.misses>=2){
       var right=btn.parentNode.querySelector('[data-id="'+w.id+'"]');
-      if(right) right.style.boxShadow="0 0 0 4px #3cbf8a";
+      if(right) right.classList.add("hinted");
+      if(quiz.misses===2) toast("再听一听，点发亮的那个");
     }
     setTimeout(function(){ btn.classList.remove("ng"); }, 420);
   }
@@ -831,15 +843,13 @@ function onListenPick(btn, L){
     letters.locked=true;
     btn.classList.add("ok");
     sfxGood();
-    var praise=Math.random()<0.45 && store.name;
-    if(praise) speak("Great job, "+store.name+"!");
-    else speak(L.letter);
+    speak(L.letter);
     var last=letters.i>=letters.list.length-1;
     setTimeout(function(){
       if(last) finishRound("letters");
       else openCele({
         emoji:pickWinEmoji(),
-        msg: praise ? ("Great job, "+store.name+"!") : "对啦！",
+        msg: "对啦！",
         sub: L.letter+"  "+L.letter.toLowerCase()+(L.example?"  ·  "+L.example.en:""),
         ok:"下一题",
         onok:function(){ letters.i++; renderListen(true); }
@@ -852,7 +862,8 @@ function onListenPick(btn, L){
     speak(L.letter);
     if(letters.misses>=2){
       var right=btn.parentNode.querySelector('[data-id="'+L.id+'"]');
-      if(right) right.style.boxShadow="0 0 0 4px #3cbf8a";
+      if(right) right.classList.add("hinted");
+      if(letters.misses===2) toast("再听一听，点发亮的那个");
     }
     setTimeout(function(){ btn.classList.remove("ng"); }, 420);
   }
@@ -923,15 +934,13 @@ function checkSpell(){
   var sp=letters.spell, w=letters.list[letters.i];
   if(sp.slots.join("")===sp.target.join("")){
     sfxGood();
-    var praise=Math.random()<0.45 && store.name;
-    if(praise) speak("Great job, "+store.name+"!");
-    else speakWord(w);
+    speakWord(w);
     var last=letters.i>=letters.list.length-1;
     setTimeout(function(){
       if(last) finishRound("letters");
       else openCele({
         emoji:pickWinEmoji(),
-        msg: praise ? ("Great job, "+store.name+"!") : "拼对啦！",
+        msg: "拼对啦！",
         sub: w.en+"  ·  "+w.zh,
         ok:"下一题",
         onok:function(){ letters.i++; renderSpell(); }
@@ -963,7 +972,7 @@ function finishRound(src){
   var st=awardSticker(src);
   sfxGood();
   var line=store.name ? ("太棒了, "+store.name+"!") : "太棒了！";
-  if(store.name && Math.random()<0.6) speak("Great job, "+store.name+"!");
+  if(store.name) speak("Great job, "+store.name+"!", "phrase");
   openCele({
     emoji:"🎀",
     msg:line,
@@ -1046,7 +1055,8 @@ function openParent(){
     '<div class="row"><span>已经会的词</span><b>'+learnedCount()+" / "+WORDS.length+"</b></div>"+
     '<div class="row"><span>贴纸</span><b>'+store.stickers.length+" 张</b></div>"+
     '<div class="row"><span>今天新会的词</span><b>'+store.today.words.length+"</b></div>"+
-    '<p class="muted">听音选图里连续答对 2 次，才算「会了」。长按首页右上角小星星 2 秒可以打开这里。<br>没声音请检查静音键。添加到主屏幕后，没网也能玩。</p>'+
+    '<p class="muted" id="voiceLine">英语声音：'+esc(voiceStatusText())+'</p>'+
+    '<p class="muted">示范音是这台手机或平板自己的英语声音，不是真人录音。有美式声音时会优先用它。tree、grape 读的就是这两个英语单词。<br>听音选图里连续答对 2 次，才算「会了」。长按首页右上角小星星 2 秒可以打开这里。<br>没声音请检查静音键。添加到主屏幕后，没网也能玩。版本 '+esc(APP_BUILD)+'。</p>'+
     '<button type="button" class="btn ok" id="pName">换一个英文名</button>'+
     '<button type="button" class="btn danger" id="pReset">重置进度</button>'+
     '<button type="button" class="btn close" id="pClose">关闭</button>'+
@@ -1104,7 +1114,7 @@ function boot(){
   var q=new URLSearchParams(location.search);
   var shot=q.get("shot");
   if(shot){ runShot(shot); return; }
-  if("serviceWorker" in navigator){
+  if(q.get("nosw")!=="1" && "serviceWorker" in navigator){
     navigator.serviceWorker.register("./sw.js").then(function(){
       try{ if(navigator.serviceWorker.controller) navigator.serviceWorker.getRegistration().then(function(r){ if(r) r.update(); }); }catch(e){}
     }).catch(function(){});
@@ -1121,12 +1131,27 @@ function boot(){
 
 window.__kidseng={
   APP_NAME:APP_NAME,
+  APP_BUILD:APP_BUILD,
+  STORAGE_KEY:STORAGE_KEY,
   wordCount:WORDS.length,
   letterCount:LETTERS.length,
   show:runShot,
   getStore:function(){ return store; },
   loadStore:loadStore,
-  goHome:goHome
+  goHome:goHome,
+  speech:speechCtl,
+  speakLook:speakLook,
+  speakWord:speakWord,
+  startLook:startLook,
+  startQuiz:startQuiz,
+  startListen:startListen,
+  debug:function(){
+    return {
+      look: look.deck[look.i] ? look.deck[look.i].id : "",
+      quiz: quiz.list[quiz.i] ? quiz.list[quiz.i].id : "",
+      letter: letters.list[letters.i] ? letters.list[letters.i].id : ""
+    };
+  }
 };
 
 if(document.readyState==="loading") document.addEventListener("DOMContentLoaded", boot);
