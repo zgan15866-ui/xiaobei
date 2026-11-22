@@ -123,6 +123,11 @@ h1.app{font-size:15px;color:var(--muted);font-weight:700;text-align:center;lette
 .nav-row .arr:disabled{opacity:.3}
 .speak-btn{flex:1;height:72px;border-radius:24px;background:linear-gradient(160deg,#ff9ec4,#ff7eab);color:#fff;font-size:24px;font-weight:900;box-shadow:0 8px 0 #e86a98}
 .speak-btn:active{transform:translateY(4px);box-shadow:0 4px 0 #e86a98}
+.speak-col{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
+.speak-col .speak-btn{width:100%;height:58px;font-size:20px}
+.look-card.letter-card{min-height:0}
+.look-card.letter-card .letter-pair{font-size:72px}
+.look-card.letter-card .pic{font-size:88px}
 
 /* —— 听音选图 —— */
 .quiz-head{text-align:center;padding:6px 0 12px}
@@ -411,8 +416,19 @@ function pickWeighted(list, n, preferIds){
 }
 function shuffle(a){ a=a.slice(); for(var i=a.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
 
-/* ---------- 发音（按 iOS 坑处理） ---------- */
+/* ---------- 发音 ---------- */
+/* 字母名，不是音素。单字大写 W/Z 在不少设备上会被读成 Capital W/Z，所以改读这个美式字母名。
+   换声音或改这一串，都不能证明 bag/tree/grape 的辅音已经听对。 */
+var LETTER_NAME_US={
+  A:"ay",B:"bee",C:"see",D:"dee",E:"ee",F:"eff",G:"jee",H:"aitch",I:"eye",J:"jay",K:"kay",L:"ell",
+  M:"em",N:"en",O:"oh",P:"pee",Q:"cue",R:"ar",S:"ess",T:"tee",U:"you",V:"vee",W:"double you",X:"ex",Y:"why",Z:"zee"
+};
+function letterName(letter){
+  var L=String(letter||"").trim().charAt(0).toUpperCase();
+  return LETTER_NAME_US[L]||"";
+}
 var voices=[];
+var speakGen=0;
 function loadVoices(){
   try{ voices=(window.speechSynthesis && speechSynthesis.getVoices())||[]; }catch(e){ voices=[]; }
 }
@@ -421,39 +437,65 @@ if(window.speechSynthesis){
   try{ speechSynthesis.addEventListener("voiceschanged", loadVoices); }catch(e){}
   speechSynthesis.onvoiceschanged=loadVoices;
 }
-function normLang(l){ return String(l||"").replace("_","-").toLowerCase(); }
+document.addEventListener("pointerdown", loadVoices, {passive:true, capture:true});
+function normLang(l){ return String(l||"").replace(/_/g,"-").toLowerCase(); }
+function isUS(l){ var n=normLang(l); return n==="en-us"||n.indexOf("en-us-")===0; }
+function isEN(l){ var n=normLang(l); return n==="en"||n.indexOf("en-")===0; }
+function voiceScore(v){
+  if(!v||!isEN(v.lang)) return -1;
+  var name=String(v.name||"");
+  var score=isUS(v.lang)?200:40;
+  if(/bad news|bahh|bells|boing|bubbles|cellos|zarvox|trinoids|whisper|fred\b|junior|ralph|kathy/i.test(name)) score-=180;
+  var rank=[/samantha.*(enhanced|premium)/i,/samantha/i,/ava\b/i,/allison/i,/nicky/i,/zoe\b/i,/aria/i,/jenny/i,/google\s*us\s*english/i,/alex\b/i];
+  for(var i=0;i<rank.length;i++){ if(rank[i].test(name)){ score+=(rank.length-i)*4; break; } }
+  if(/enhanced|premium|natural|neural/i.test(name)) score+=12;
+  if(v.localService) score+=4;
+  return score;
+}
 function pickVoice(){
   loadVoices();
-  if(!voices.length) return null;
-  var lang="en-gb";
-  var same=voices.filter(function(v){ return normLang(v.lang)===lang; });
-  if(!same.length) same=voices.filter(function(v){ return normLang(v.lang).indexOf("en-gb")===0; });
-  var pref=/Daniel|Arthur|Kate|Serena|Martha|Moira/;
-  var v=same.filter(function(v){ return pref.test(v.name); })[0] || same[0];
-  if(v) return v;
-  var us=voices.filter(function(v){ return normLang(v.lang).indexOf("en-us")===0; });
-  return us[0] || voices.filter(function(v){ return /^en/i.test(v.lang||""); })[0] || null;
+  var best=null, bestScore=-1;
+  for(var i=0;i<voices.length;i++){
+    var s=voiceScore(voices[i]);
+    if(s>bestScore){ bestScore=s; best=voices[i]; }
+  }
+  return best;
 }
-function speak(text){
-  if(!window.speechSynthesis || !text) return;
+function speakParts(parts){
+  if(!window.speechSynthesis) return;
+  var list=[];
+  for(var i=0;i<(parts||[]).length;i++){
+    var s=String(parts[i]==null?"":parts[i]).replace(/\s+/g," ").trim();
+    if(s) list.push(s);
+  }
+  if(!list.length) return;
+  var synth=window.speechSynthesis;
+  var my=++speakGen;
+  var delay=0;
   try{
-    var u=new SpeechSynthesisUtterance(String(text));
-    var v=pickVoice();
-    if(v){ try{ u.voice=v; }catch(e){} u.lang=v.lang||"en-GB"; }
-    else { u.lang="en-GB"; }
-    u.rate=VOICE_RATE;
-    try{ speechSynthesis.resume(); }catch(e){}
-    if(speechSynthesis.speaking || speechSynthesis.pending){
-      try{ speechSynthesis.cancel(); }catch(e){}
-      try{ speechSynthesis.resume(); }catch(e){}
-    }
-    speechSynthesis.speak(u);
-    try{ speechSynthesis.resume(); }catch(e){}
+    if(synth.speaking||synth.pending){ synth.cancel(); delay=80; }
   }catch(e){}
+  function fire(){
+    if(my!==speakGen) return;
+    try{
+      var v=pickVoice();
+      list.forEach(function(text){
+        var u=new SpeechSynthesisUtterance(text);
+        if(v){ try{ u.voice=v; }catch(e){} u.lang=v.lang||"en-US"; }
+        else u.lang="en-US";
+        u.rate=VOICE_RATE;
+        synth.speak(u);
+      });
+      try{ if(synth.paused) synth.resume(); }catch(e){}
+    }catch(e){}
+  }
+  if(delay) setTimeout(fire, delay);
+  else fire();
 }
+function speak(text){ speakParts([text]); }
 function speakWord(w){
   if(!w) return;
-  if(w.letter) speak(w.letter);
+  if(w.letter) speak(letterName(w.letter));
   else speak(w.en);
 }
 
@@ -643,28 +685,46 @@ function renderLook(speakNow){
   var pct=Math.round((look.i)/Math.max(look.deck.length,1)*100);
   var isLetter=!!w.letter;
   var body;
+  var sayButtons;
   if(isLetter){
     body='<div class="letter-pair">'+w.letter+" "+w.letter.toLowerCase()+'</div>'+
       picHTML(w.example)+
       '<div class="en">'+(w.example?esc(w.example.en):"")+'</div>'+
       '<div class="zh">'+esc(w.letter)+" 像 "+(w.example?esc(w.example.zh):"")+'</div>';
+    sayButtons='<div class="speak-col">'+
+      '<button type="button" class="speak-btn" id="lookLetter">听字母名</button>'+
+      (w.example?'<button type="button" class="speak-btn" id="lookWord">听单词</button>':"")+
+      "</div>";
   } else {
     body=picHTML(w)+'<div class="en">'+esc(w.en)+'</div><div class="zh">'+esc(w.zh)+'</div>';
+    sayButtons='<button type="button" class="speak-btn" id="lookSay">🔊 再听</button>';
   }
   el.innerHTML=topbar("home", '<span></span>')+
     themeChips(look.theme, "look")+
     '<div class="prog-line"><span>'+(look.i+1)+" / "+look.deck.length+'</span><div class="bar"><i style="width:'+pct+'%"></i></div></div>'+
-    '<div class="look-wrap"><div class="look-card" id="lookCard">'+body+'<div class="say-hint">点卡片听一听</div></div>'+
+    '<div class="look-wrap"><div class="look-card'+(isLetter?" letter-card":"")+'" id="lookCard">'+body+
+    '<div class="say-hint">'+(isLetter?"字母名和单词可以分开听":"点卡片听一听")+'</div></div>'+
     '<div class="nav-row">'+
       '<button type="button" class="arr" id="lookPrev"'+(look.i===0?" disabled":"")+'>◀</button>'+
-      '<button type="button" class="speak-btn" id="lookSay">🔊 再听</button>'+
+      sayButtons+
       '<button type="button" class="arr" id="lookNext">▶</button>'+
     '</div></div>';
   bindBack(el);
   bindThemes(el, function(th){ startLook(th); });
-  function say(){ if(isLetter){ speak(w.letter); } else speakWord(w); }
+  function say(){
+    if(isLetter){
+      var parts=[letterName(w.letter)];
+      if(w.example&&w.example.en) parts.push(w.example.en);
+      speakParts(parts);
+    } else speakWord(w);
+  }
   $("lookCard").onclick=function(){ say(); };
-  $("lookSay").onclick=function(){ say(); };
+  if(isLetter){
+    $("lookLetter").onclick=function(){ speak(letterName(w.letter)); };
+    if($("lookWord")) $("lookWord").onclick=function(){ speak(w.example.en); };
+  } else {
+    $("lookSay").onclick=function(){ say(); };
+  };
   $("lookPrev").onclick=function(){ if(look.i>0){ look.i--; renderLook(true); } };
   $("lookNext").onclick=function(){ lookNext(); };
   bindSwipe($("lookCard"));
@@ -819,11 +879,11 @@ function renderListen(speakNow){
       return '<button type="button" class="letter-tile" data-id="'+o.id+'">'+o.letter+'</button>';
     }).join("")+'</div>';
   bindBack(el);
-  $("letSay").onclick=function(){ speak(L.letter); };
+  $("letSay").onclick=function(){ speak(letterName(L.letter)); };
   el.querySelectorAll(".letter-tile").forEach(function(b){
     b.onclick=function(){ onListenPick(b, L); };
   });
-  if(speakNow) speak(L.letter);
+  if(speakNow) speak(letterName(L.letter));
 }
 function onListenPick(btn, L){
   if(letters.locked) return;
@@ -833,7 +893,7 @@ function onListenPick(btn, L){
     sfxGood();
     var praise=Math.random()<0.45 && store.name;
     if(praise) speak("Great job, "+store.name+"!");
-    else speak(L.letter);
+    else speak(letterName(L.letter));
     var last=letters.i>=letters.list.length-1;
     setTimeout(function(){
       if(last) finishRound("letters");
@@ -849,7 +909,7 @@ function onListenPick(btn, L){
     btn.classList.add("ng");
     letters.misses=(letters.misses||0)+1;
     sfxBad();
-    speak(L.letter);
+    speak(letterName(L.letter));
     if(letters.misses>=2){
       var right=btn.parentNode.querySelector('[data-id="'+L.id+'"]');
       if(right) right.style.boxShadow="0 0 0 4px #3cbf8a";
@@ -1124,6 +1184,8 @@ window.__kidseng={
   wordCount:WORDS.length,
   letterCount:LETTERS.length,
   show:runShot,
+  letterName:letterName,
+  startLook:startLook,
   getStore:function(){ return store; },
   loadStore:loadStore,
   goHome:goHome
